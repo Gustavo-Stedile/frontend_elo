@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ELO</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+  <!-- ===================== Autenticação ===================== -->
+  <main id="auth-view" class="auth" hidden>
+    <section class="auth-brand">
+      <h1 class="wordmark">elo</h1>
+      <p>O canal direto entre você e o seu grêmio.</p>
+    </section>
+
+    <section class="auth-panel">
+      <div class="tabs" role="tablist">
+        <button class="tab active" role="tab" data-tab="login" aria-selected="true">Entrar</button>
+        <button class="tab" role="tab" data-tab="cadastro" aria-selected="false">Criar conta</button>
+      </div>
+
+      <form id="login-form" class="form" autocomplete="on">
+        <div class="field">
+          <label for="login-email">E-mail</label>
+          <input id="login-email" name="email" type="email" required autocomplete="email">
+        </div>
+        <div class="field">
+          <label for="login-senha">Senha</label>
+          <input id="login-senha" name="senha" type="password" required minlength="8" autocomplete="current-password">
+        </div>
+        <p class="form-error" id="login-erro" role="alert" hidden></p>
+        <button class="btn primary block" type="submit">Entrar</button>
+      </form>
+
+      <form id="cadastro-form" class="form" autocomplete="on" hidden>
+        <div class="field">
+          <label for="cad-nome">Nome completo</label>
+          <input id="cad-nome" name="nome" type="text" required minlength="3" maxlength="100" autocomplete="name">
+        </div>
+        <div class="field">
+          <label for="cad-email">E-mail</label>
+          <input id="cad-email" name="email" type="email" required autocomplete="email">
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label for="cad-cpf">CPF</label>
+            <input id="cad-cpf" name="cpf" type="text" required inputmode="numeric" placeholder="000.000.000-00">
+          </div>
+          <div class="field">
+            <label for="cad-ra">RA <span class="muted">(opcional)</span></label>
+            <input id="cad-ra" name="ra" type="text" minlength="5" maxlength="30">
+          </div>
+        </div>
+        <div class="field">
+          <label for="cad-senha">Senha</label>
+          <input id="cad-senha" name="senha" type="password" required minlength="8" maxlength="128" autocomplete="new-password">
+          <small class="muted">Mínimo de 8 caracteres.</small>
+        </div>
+        <p class="form-error" id="cadastro-erro" role="alert" hidden></p>
+        <button class="btn primary block" type="submit">Criar conta</button>
+      </form>
+
+      <p class="auth-server muted">
+        Servidor: <code id="server-url"></code>
+        <button type="button" class="link-btn" id="change-server">alterar</button>
+      </p>
+    </section>
+  </main>
+
+  <!-- ===================== Aplicação ===================== -->
+  <div id="app-view" class="app" hidden>
+    <nav class="rail" id="rail" aria-label="Grêmios"></nav>
+
+    <aside class="sidebar" aria-label="Canais">
+      <header class="sidebar-head" id="sidebar-head"></header>
+      <div class="sidebar-body" id="channel-list"></div>
+      <footer class="sidebar-foot" id="user-box"></footer>
+    </aside>
+
+    <section class="chat" id="chat"></section>
+
+    <aside class="members" id="members" aria-label="Membros"></aside>
+  </div>
+
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
