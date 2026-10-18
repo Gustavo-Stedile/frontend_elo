@@ -8,7 +8,7 @@ Frontend em JavaScript puro (módulos ES), sem build e sem dependências.
 
    ```bash
    cd elo
-   uvicorn main:app --reload
+   python -m uvicorn main:app --reload
    ```
 
 2. Sirva esta pasta em uma porta liberada no CORS do backend (`5173` ou `3000`):
