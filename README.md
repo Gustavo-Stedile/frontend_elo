@@ -4,21 +4,14 @@ Frontend em JavaScript puro (módulos ES), sem build e sem dependências.
 
 ## Como rodar
 
-1. Suba o backend (porta 8000):
+Execute o frontend na porta `5173`:
 
-   ```bash
-   cd elo
-   python -m uvicorn main:app --reload
-   ```
+```bash
+python executar.py
+```
 
-2. Sirva esta pasta em uma porta liberada no CORS do backend (`5173` ou `3000`):
-
-   ```bash
-   cd elo-frontend
-   python -m http.server 5173
-   ```
-
-3. Abra http://localhost:5173
+O navegador abrirá em http://localhost:5173. O script serve somente o frontend;
+para usar os recursos que dependem da API, inicie o backend separadamente.
 
 > Não abra o `index.html` com duplo clique (`file://`): módulos ES e CORS não funcionam assim.
 
