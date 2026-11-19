@@ -35,12 +35,12 @@ js/app.js   # estado, regras de tela e renderização
 - Criar grêmio e alternar entre grêmios
 - Canais: listar, criar, editar, excluir (conforme permissões)
 - Chat: enviar, editar e apagar mensagens, paginar histórico, atualização por polling (3 s)
-- Membros: listar, adicionar por ID, remover, atribuir/remover cargos
+- Membros: listar e atribuir/remover cargos
 - Cargos: criar, editar, excluir, com permissões e prioridade
 - A interface esconde ações para as quais o usuário não tem permissão; quem decide é sempre o servidor
 
 ## Limitações conhecidas
 
 - O polling usa `depois_de`, então edições e exclusões feitas por **outras** pessoas só aparecem ao reabrir o canal.
+- Adicionar e remover membros estão desativados na interface e na API.
 - Sobrescritas de permissão por canal (`/canal/{id}/permissoes/...`) e permissões individuais por membro ainda não têm tela.
-- Adicionar membro exige o ID numérico (mostrado abaixo do nome, no canto inferior esquerdo), pois a API não oferece busca de usuários.

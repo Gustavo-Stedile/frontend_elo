@@ -154,8 +154,6 @@ export const criarComunicado = (gremioId, dados) =>
 
 // ---- Membros ----
 export const listarMembros = (gremioId) => get(`/gremio/${gremioId}/membros/`);
-export const adicionarMembro = (gremioId, usuario_id) => post(`/gremio/${gremioId}/membros/`, { usuario_id });
-export const removerMembro = (gremioId, alvoId) => del(`/gremio/${gremioId}/membros/${alvoId}`);
 export const atribuirCargo = (gremioId, alvoId, cargoId) =>
   put(`/gremio/${gremioId}/membros/${alvoId}/cargos/${cargoId}`);
 export const removerCargoDoMembro = (gremioId, alvoId, cargoId) =>

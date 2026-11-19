@@ -875,31 +875,6 @@ async function carregarMembros(seq = seqGremio) {
   }
 }
 
-async function adicionarMembro() {
-  const ok = await formDialog({
-    titulo: 'Adicionar membro',
-    texto: 'Peça o ID da pessoa: ele aparece no canto inferior esquerdo, abaixo do nome dela.',
-    fields: [{ name: 'usuario_id', label: 'ID do usuário', type: 'number', required: true, min: 1 }],
-    enviar: 'Adicionar',
-    onSubmit: (v) => api.adicionarMembro(state.gremio.id, v.usuario_id),
-  });
-  if (ok) {
-    toast('Membro adicionado.', 'success');
-    carregarMembros();
-  }
-}
-
-async function removerMembro(m) {
-  const ok = await confirmar(`Remover ${m.nome ?? 'membro'}?`, 'A pessoa perde o acesso ao grêmio.', 'Remover');
-  if (!ok) return;
-  try {
-    await api.removerMembro(state.gremio.id, m.usuario_id);
-    carregarMembros();
-  } catch (err) {
-    toast(err.message, 'error');
-  }
-}
-
 async function darCargo(m) {
   const disponiveis = state.cargos.filter((c) =>
     !c.padrao && !m.cargos_ids.includes(c.id) && podeAtribuirCargo(c)
@@ -1495,12 +1470,9 @@ function renderMembros() {
   if (painel.hidden) return;
 
   const cargosPorId = new Map(state.cargos.map((c) => [c.id, c]));
-  const gerMembros = podeGremio('GERENCIAR_MEMBROS');
-
   painel.append(
     h('div', { class: 'section-title' },
-      h('span', {}, `Membros (${state.membros.length})`),
-      gerMembros ? h('button', { class: 'icon-btn', type: 'button', title: 'Adicionar membro', 'aria-label': 'Adicionar membro', onclick: adicionarMembro }, '+') : null),
+      h('span', {}, `Membros (${state.membros.length})`)),
     h('button', { class: 'btn ghost sm block', type: 'button', onclick: abrirCargos }, 'Ver cargos')
   );
 
@@ -1528,10 +1500,7 @@ function renderMembros() {
               podeAtribuirCargo(cargo)
             ) && podeMexer
               ? h('button', { class: 'chip add', type: 'button', onclick: () => darCargo(m) }, '+ cargo')
-              : null)),
-        gerMembros && podeMexer && m.usuario_id !== state.me.id
-          ? h('button', { class: 'link-btn danger-text', type: 'button', onclick: () => removerMembro(m) }, 'Remover')
-          : null
+              : null))
       );
     }))
   );
