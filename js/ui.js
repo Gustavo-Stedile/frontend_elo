@@ -36,7 +36,29 @@ export const PERMISSOES = {
   GERENCIAR_CARGOS: 'Gerenciar cargos',
   GERENCIAR_MEMBROS: 'Gerenciar membros',
   GERENCIAR_GREMIO: 'Gerenciar grêmio',
+  CRIAR_ENQUETE: 'Criar enquetes',
+  CRIAR_COMUNICADO: 'Criar comunicados',
   ADMINISTRADOR: 'Administrador',
+  GREMIO_EDITAR_NOME: 'Editar nome do grêmio',
+  GREMIO_EDITAR_DESCRICAO: 'Editar descrição do grêmio',
+  GREMIO_CRIAR_CARGO: 'Criar cargos',
+  GREMIO_CRIAR_CANAL: 'Criar canais',
+  GREMIO_CRIAR_ENQUETE: 'Criar enquetes',
+  GREMIO_CRIAR_COMUNICADO: 'Criar comunicados',
+  GREMIO_GERENCIAR_PERMISSOES: 'Gerenciar permissões',
+  CANAL_VER: 'Ver canal',
+  CANAL_LER_HISTORICO: 'Ler histórico do canal',
+  CANAL_ENVIAR_MENSAGENS: 'Enviar mensagens',
+  CANAL_GERENCIAR_MENSAGENS: 'Gerenciar mensagens',
+  CANAL_EDITAR: 'Editar canal',
+  CANAL_EXCLUIR: 'Excluir canal',
+  CANAL_GERENCIAR_PERMISSOES: 'Gerenciar permissões do canal',
+  CANAL_CRIAR_ENQUETE: 'Criar enquetes no canal',
+  CANAL_CRIAR_COMUNICADO: 'Criar comunicados no canal',
+  ENQUETE_VOTAR: 'Votar nesta enquete',
+  COMUNICADO_VISUALIZAR: 'Visualizar este comunicado',
+  CARGO_EDITAR: 'Editar cargo',
+  CARGO_ATRIBUIR: 'Atribuir cargo',
 };
 
 export function initials(nome) {
@@ -116,6 +138,13 @@ function campo(f) {
       )
     );
     return h('div', { class: 'field' }, h('span', { class: 'field-label' }, f.label), input);
+  } else if (f.type === 'checkbox') {
+    input = h('input', {
+      id,
+      name: f.name,
+      type: 'checkbox',
+      checked: f.value ?? false,
+    });
   } else {
     input = h('input', {
       id,
@@ -142,6 +171,10 @@ function lerValores(form, fields) {
       continue;
     }
     const el = form.elements[f.name];
+    if (f.type === 'checkbox') {
+      out[f.name] = el.checked;
+      continue;
+    }
     let v = el.value;
     if (f.type === 'number') v = v === '' ? null : Number(v);
     else if (f.type !== 'password') v = v.trim();
@@ -154,7 +187,15 @@ function lerValores(form, fields) {
  * Formulário em diálogo. `onSubmit(valores)` pode lançar erro: a mensagem
  * aparece no próprio diálogo. Resolve `true` se salvou, `false` se cancelou.
  */
-export function formDialog({ titulo, texto, fields = [], enviar = 'Salvar', perigo = false, onSubmit }) {
+export function formDialog({
+  titulo,
+  texto,
+  fields = [],
+  enviar = 'Salvar',
+  perigo = false,
+  acoes = [],
+  onSubmit,
+}) {
   return new Promise((resolve) => {
     let ok = false;
     const erro = h('p', { class: 'form-error', role: 'alert', hidden: true });
@@ -186,6 +227,20 @@ export function formDialog({ titulo, texto, fields = [], enviar = 'Salvar', peri
       h(
         'div',
         { class: 'form-actions' },
+        acoes.map((acao) =>
+          h('button', {
+            type: 'button',
+            class: `btn ${acao.perigo ? 'danger' : 'ghost'} sm`,
+            onclick: async () => {
+              modal.close();
+              try {
+                await acao.executar();
+              } catch (err) {
+                toast(err.message || String(err), 'error');
+              }
+            },
+          }, acao.rotulo)
+        ),
         h('button', { type: 'button', class: 'btn ghost', onclick: () => modal.close() }, 'Cancelar'),
         botao
       )

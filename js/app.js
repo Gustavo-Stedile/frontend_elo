@@ -11,6 +11,8 @@ const LIMITE = 50;
 const state = {
   me: null,
   gremios: [],
+  enquetes: [],
+  comunicados: [],
   gremio: null,
   perms: { fundador: false, cargos: [], permissoes: [] },
   canais: [],
@@ -24,6 +26,19 @@ const state = {
   cargos: [],
   pollTimer: null,
   membrosAberto: localStorage.getItem('elo_membros') !== '0',
+  secoesLaterais: {
+    canais: localStorage.getItem('elo_secao_canais') !== '0',
+    comunicados: localStorage.getItem('elo_secao_comunicados') === '1',
+    enquetes: localStorage.getItem('elo_secao_enquetes') === '1',
+  },
+  cacheLateral: {
+    enquetes: new Set(),
+    comunicados: new Set(),
+  },
+  requisicoesLaterais: {
+    enquetes: new Map(),
+    comunicados: new Map(),
+  },
 };
 
 // Descarta respostas atrasadas quando o usuário já navegou para outro lugar.
@@ -35,7 +50,16 @@ let seqCanal = 0;
 // ---------------------------------------------------------------------
 const ehAdmin = () =>
   state.perms.fundador || state.perms.permissoes.includes('ADMINISTRADOR');
-const podeGremio = (p) => ehAdmin() || state.perms.permissoes.includes(p);
+const temPermissaoObjeto = (codigo, tipo, id) =>
+  (state.perms.permissoes_objeto ?? []).some((p) =>
+    p.codigo === codigo &&
+    (tipo === undefined || p.recurso_tipo === tipo) &&
+    (id === undefined || p.recurso_id === id)
+  );
+const podeGremio = (p) =>
+  ehAdmin() ||
+  state.perms.permissoes.includes(p) ||
+  temPermissaoObjeto(p, 'GREMIO', state.gremio?.id);
 const podeCanal = (p) => ehAdmin() || state.canalPerms.includes(p);
 
 // ---------------------------------------------------------------------
@@ -75,6 +99,31 @@ async function iniciar() {
 function ligarAuth() {
   $('#server-url').textContent = api.getBaseUrl();
 
+  const cpfInput = $('#cad-cpf');
+  cpfInput.addEventListener('input', () => {
+    cpfInput.value = cpfInput.value
+      .replace(/\D/g, '')
+      .replace(/(\d{3})(\d)/, '$1.$2')
+      .replace(/(\d{3})(\d)/, '$1.$2')
+      .replace(/(\d{3})(\d{1,2})$/, '$1-$2')
+      .slice(0, 14);
+  });
+
+  const raInput = $('#cad-ra');
+  raInput.addEventListener('blur', async () => {
+    const info = $('#cad-ra-dados');
+    info.textContent = '';
+    if (!raInput.value.trim()) return;
+    try {
+      const dados = await api.resolverRA(raInput.value.trim());
+      if (dados.instituicao) {
+        info.textContent = `Instituição: ${dados.instituicao} · Etapa: ${dados.etapa_ensino}`;
+      }
+    } catch (err) {
+      info.textContent = '';
+    }
+  });
+
   document.querySelectorAll('.tab').forEach((tab) =>
     tab.addEventListener('click', () => {
       const alvo = tab.dataset.tab;
@@ -101,11 +150,21 @@ function ligarAuth() {
   });
 
   ligarFormAuth($('#cadastro-form'), $('#cadastro-erro'), async (d) => {
-    const dados = { nome: d.nome, email: d.email, cpf: d.cpf, senha: d.senha };
+    const dados = {
+      nome: d.nome,
+      email: d.email,
+      cpf: d.cpf.replace(/\D/g, ''),
+      senha: d.senha,
+    };
     if (d.ra) dados.ra = d.ra;
-    await api.cadastrar(dados);
+    const resultado = await api.cadastrar(dados);
     await entrar(d.email, d.senha);
-    toast('Conta criada. Bem-vindo ao ELO!', 'success');
+    const usuario = resultado.usuario;
+    if (usuario.instituicao && usuario.etapa_ensino) {
+      toast(`Conta criada e vinculada a ${usuario.instituicao}, etapa ${usuario.etapa_ensino}.`, 'success');
+    } else {
+      toast('Conta criada. Bem-vindo ao ELO!', 'success');
+    }
   });
 }
 
@@ -161,6 +220,8 @@ async function selecionarGremio(id) {
   state.mensagens = [];
   state.membros = [];
   state.cargos = [];
+  state.enquetes = [];
+  state.comunicados = [];
   document.querySelector('.app').classList.remove('nav-open');
   renderRail();
 
@@ -182,11 +243,31 @@ async function selecionarGremio(id) {
   if (c) await selecionarCanal(c.id);
 }
 
+function podeCriarGremio() {
+  if (!state.me?.ra) return false;
+
+  const instituicao = state.me.instituicao || 'IFSP';
+  const etapa = Number(state.me.etapa_ensino || 3);
+  return !state.gremios.some((g) =>
+    g.instituicao === instituicao && Number(g.etapa_ensino) === etapa
+  );
+}
+
 async function novoGremio() {
+  if (!state.me?.ra) {
+    toast('Cadastre um RA antes de criar um grêmio.', 'error');
+    return;
+  }
+
   let criado;
+  const etapa = state.me.etapa_ensino === 1
+    ? 'Ensino Fundamental'
+    : state.me.etapa_ensino === 2
+      ? 'Ensino Médio'
+      : 'Ensino Superior';
   const ok = await formDialog({
     titulo: 'Criar grêmio',
-    texto: 'Você será o fundador. O grêmio já nasce com o canal #geral e os cargos Membro e Administrador.',
+    texto: `Você será o fundador. Instituição: ${state.me.instituicao || 'IFSP'} · Etapa: ${etapa}. O grêmio já nasce com o canal #geral e os cargos Membro e Administrador.`,
     fields: [{ name: 'nome', label: 'Nome do grêmio', required: true, min: 2, max: 255 }],
     enviar: 'Criar grêmio',
     onSubmit: async (v) => {
@@ -196,18 +277,366 @@ async function novoGremio() {
   if (ok) await carregarGremios(criado.id);
 }
 
-async function sairDoGremio() {
-  const ok = await confirmar(
-    `Sair de ${state.gremio.nome}?`,
-    'Você perde o acesso aos canais deste grêmio.',
-    'Sair do grêmio'
-  );
-  if (!ok) return;
+async function editarGremio() {
+  const campos = [];
+  const podeNome = podeGremio('GREMIO_EDITAR_NOME');
+  const podeDescricao = podeGremio('GREMIO_EDITAR_DESCRICAO');
+  if (podeNome) {
+    campos.push({
+      name: 'nome',
+      label: 'Nome',
+      required: true,
+      min: 2,
+      max: 255,
+      value: state.gremio.nome,
+    });
+  }
+  if (podeDescricao) {
+    campos.push({
+      name: 'descricao',
+      label: 'Descrição',
+      type: 'textarea',
+      max: 1000,
+      value: state.gremio.descricao ?? '',
+    });
+  }
+  const ok = await formDialog({
+    titulo: 'Editar grêmio',
+    texto: state.canal && (ehAdmin() || temPermissaoObjeto(
+      'CANAL_GERENCIAR_PERMISSOES', 'CANAL', state.canal.id
+    )) ? 'Edite os dados do grêmio ou gerencie as permissões do canal selecionado.' : undefined,
+    fields: campos,
+    enviar: campos.length ? 'Salvar' : 'Fechar',
+    acoes: state.canal && (ehAdmin() || temPermissaoObjeto(
+      'CANAL_GERENCIAR_PERMISSOES', 'CANAL', state.canal.id
+    )) ? [{
+      rotulo: 'Permissões',
+      executar: editarPermissoesCanal,
+    }] : [],
+    onSubmit: async (valores) => {
+      if (!campos.length) return;
+      const atualizado = await api.atualizarGremio(state.gremio.id, {
+        ...(podeNome ? { nome: valores.nome } : {}),
+        ...(podeDescricao ? { descricao: valores.descricao } : {}),
+      });
+      state.gremio = { ...state.gremio, ...atualizado };
+      state.gremios = state.gremios.map((g) =>
+        g.id === state.gremio.id ? state.gremio : g
+      );
+    },
+  });
+  if (ok) renderTudo();
+}
+
+// ---------------------------------------------------------------------
+// Enquetes e comunicados
+// ---------------------------------------------------------------------
+async function abrirEnquetes() {
+  const corpo = h('div', { class: 'cargos' });
+  const modal = openModal('Enquetes', corpo, { largo: true });
+
   try {
-    await api.removerMembro(state.gremio.id, state.me.id);
-    await carregarGremios();
+    await carregarEnquetes();
   } catch (err) {
-    toast(err.message, 'error');
+    return toast(err.message, 'error');
+  }
+
+  const podeCriar = podeGremio('GREMIO_CRIAR_ENQUETE') ||
+    (state.canal && temPermissaoObjeto(
+      'CANAL_CRIAR_ENQUETE', 'CANAL', state.canal.id
+    ));
+  if (podeCriar) {
+    corpo.append(h('div', { class: 'cargos-top' },
+      h('button', {
+        class: 'btn primary',
+        type: 'button',
+        onclick: () => criarEnquete(modal.close),
+      }, 'Nova enquete')));
+  }
+
+  if (!state.enquetes.length) {
+    corpo.append(h('p', { class: 'muted pad center' }, 'Nenhuma enquete.'));
+    return;
+  }
+
+  state.enquetes.forEach((enquete) => {
+    const nomeCanal = state.canais.find((canal) =>
+      canal.id === enquete.canal_id
+    )?.nome;
+    const escopo = enquete.canal_id ? `#${nomeCanal ?? enquete.canal_id}` : 'Grêmio';
+    const item = h('div', { class: 'cargo-item' },
+      h('div', { class: 'cargo-info' },
+        h('strong', {}, enquete.pergunta),
+        h('span', { class: 'muted' },
+          `${escopo} · ${enquete.tipo_votacao === 'MULTIPLA' ? 'Escolha múltipla' : 'Escolha única'} · ${enquete.votos_visiveis ? 'Votos visíveis' : 'Votos ocultos'}`)));
+
+    const podeVotar = temPermissaoObjeto('ENQUETE_VOTAR', 'ENQUETE', enquete.id);
+    if (podeVotar) {
+      item.append(h('button', {
+        class: 'btn primary sm',
+        type: 'button',
+        onclick: () => votarEnquete(enquete, modal.close),
+      }, 'Votar'));
+    }
+    enquete.opcoes.forEach((opcao) => {
+      item.append(h('div', { class: 'poll-option' },
+        h('span', {}, opcao.texto, enquete.votos_visiveis && opcao.votos !== null
+          ? ` (${opcao.votos})`
+          : ''),
+        enquete.votos_visiveis && opcao.participantes?.length
+          ? h('span', { class: 'muted' }, `Participantes: ${opcao.participantes.join(', ')}`)
+          : null));
+    });
+    corpo.append(item);
+  });
+}
+
+async function votarEnquete(enquete, fecharModal) {
+  const fields = [{
+    name: 'opcoes',
+    label: 'Selecione suas opções',
+    type: 'checks',
+    options: enquete.opcoes.map((opcao) => ({
+      value: String(opcao.id),
+      label: opcao.texto,
+    })),
+  }];
+  const ok = await formDialog({
+    titulo: 'Votar na enquete',
+    texto: enquete.tipo_votacao === 'MULTIPLA'
+      ? 'Você pode escolher mais de uma opção.'
+      : 'Escolha uma opção.',
+    fields,
+    enviar: 'Registrar voto',
+    onSubmit: async ({ opcoes }) => {
+      if (!opcoes.length) throw new Error('Selecione ao menos uma opção.');
+      if (enquete.tipo_votacao === 'UNICA' && opcoes.length !== 1) {
+        throw new Error('Esta enquete permite escolher apenas uma opção.');
+      }
+      await api.votarEnquete(
+        state.gremio.id,
+        enquete.id,
+        opcoes.map(Number)
+      );
+    },
+  });
+  if (ok) {
+    fecharModal();
+    abrirEnquetes();
+  }
+}
+
+async function criarEnquete(fecharModal) {
+  const escopos = [];
+  if (podeGremio('GREMIO_CRIAR_ENQUETE')) {
+    escopos.push({ value: 'GREMIO', label: 'No grêmio' });
+  }
+  if (state.canal && temPermissaoObjeto(
+    'CANAL_CRIAR_ENQUETE', 'CANAL', state.canal.id
+  )) {
+    escopos.push({ value: 'CANAL', label: `No canal #${state.canal.nome}` });
+  }
+  const ok = await formDialog({
+    titulo: 'Nova enquete',
+    fields: [
+      { name: 'pergunta', label: 'Pergunta', required: true, max: 255 },
+      { name: 'opcao1', label: 'Opção 1', required: true, max: 255 },
+      { name: 'opcao2', label: 'Opção 2', required: true, max: 255 },
+      { name: 'opcao3', label: 'Opção 3', required: false, max: 255 },
+      ...(escopos.length > 1 ? [{
+        name: 'escopo',
+        label: 'Onde publicar',
+        type: 'select',
+        options: escopos,
+        value: escopos[0].value,
+      }] : []),
+      { name: 'tipo_votacao', label: 'Tipo', type: 'select', options: [
+        { value: 'UNICA', label: 'Escolha única' },
+        { value: 'MULTIPLA', label: 'Escolha múltipla' },
+      ] },
+      { name: 'votos_visiveis', label: 'Mostrar participantes e votos', type: 'checkbox', value: true },
+    ],
+    enviar: 'Criar enquete',
+    onSubmit: async (v) => {
+      const opcoes = [v.opcao1, v.opcao2, v.opcao3].filter(Boolean);
+      const escopo = escopos.length === 1 ? escopos[0].value : v.escopo;
+      if (escopo === 'CANAL') {
+        await api.criarEnqueteCanal(state.canal.id, {
+          pergunta: v.pergunta,
+          opcoes,
+          tipo_votacao: v.tipo_votacao,
+          votos_visiveis: v.votos_visiveis,
+        });
+      } else {
+        await api.criarEnqueteGremio(state.gremio.id, {
+          pergunta: v.pergunta,
+          opcoes,
+          tipo_votacao: v.tipo_votacao,
+          votos_visiveis: v.votos_visiveis,
+        });
+      }
+      state.cacheLateral.enquetes.clear();
+    },
+  });
+  if (ok) {
+    fecharModal();
+    abrirEnquetes();
+  }
+}
+
+async function abrirComunicados() {
+  const corpo = h('div', { class: 'cargos' });
+  const modal = openModal('Comunicados', corpo, { largo: true });
+
+  try {
+    await carregarComunicados();
+  } catch (err) {
+    return toast(err.message, 'error');
+  }
+
+  const podeCriar = podeGremio('GREMIO_CRIAR_COMUNICADO') ||
+    (state.canal && temPermissaoObjeto(
+      'CANAL_CRIAR_COMUNICADO', 'CANAL', state.canal.id
+    ));
+  if (podeCriar) {
+    corpo.append(h('div', { class: 'cargos-top' },
+      h('button', {
+        class: 'btn primary',
+        type: 'button',
+        onclick: () => criarComunicado(modal.close),
+      }, 'Novo comunicado')));
+  }
+
+  if (!state.comunicados.length) {
+    corpo.append(h('p', { class: 'muted pad center' }, 'Nenhum comunicado válido.'));
+    return;
+  }
+
+  state.comunicados.forEach((c) => {
+    const nomeCanal = state.canais.find((canal) =>
+      canal.id === c.canal_id
+    )?.nome;
+    const escopo = c.canal_id ? `#${nomeCanal ?? c.canal_id}` : 'Grêmio';
+    corpo.append(
+      h('div', { class: 'cargo-item' },
+        h('div', { class: 'cargo-info' },
+          h('strong', {}, c.titulo),
+          h('span', {}, c.texto),
+          h('span', { class: 'muted' },
+            `${escopo} · ${c.autor_nome ?? 'Autor'} · válido até ${new Date(c.valido_ate).toLocaleString('pt-BR')}`)))
+    );
+  });
+}
+
+async function criarComunicado(fecharModal) {
+  const escopos = [];
+  if (podeGremio('GREMIO_CRIAR_COMUNICADO')) {
+    escopos.push({ value: 'GREMIO', label: 'No grêmio' });
+  }
+  if (state.canal && temPermissaoObjeto(
+    'CANAL_CRIAR_COMUNICADO', 'CANAL', state.canal.id
+  )) {
+    escopos.push({ value: 'CANAL', label: `No canal #${state.canal.nome}` });
+  }
+  const ok = await formDialog({
+    titulo: 'Novo comunicado',
+    fields: [
+      { name: 'titulo', label: 'Título', required: true, max: 255 },
+      { name: 'texto', label: 'Texto', type: 'textarea', required: true, max: 4000 },
+      { name: 'valido_ate', label: 'Válido até', type: 'datetime-local', required: true },
+      ...(escopos.length > 1 ? [{
+        name: 'escopo',
+        label: 'Onde publicar',
+        type: 'select',
+        options: escopos,
+        value: escopos[0].value,
+      }] : []),
+    ],
+    enviar: 'Publicar',
+    onSubmit: async (v) => {
+      const dados = {
+        titulo: v.titulo,
+        texto: v.texto,
+        valido_ate: new Date(v.valido_ate).toISOString(),
+      };
+      const escopo = escopos.length === 1 ? escopos[0].value : v.escopo;
+      if (escopo === 'CANAL') {
+        await api.criarComunicadoCanal(state.canal.id, dados);
+      } else {
+        await api.criarComunicado(state.gremio.id, dados);
+      }
+      state.cacheLateral.comunicados.clear();
+    },
+  });
+  if (ok) {
+    fecharModal();
+    abrirComunicados();
+  }
+}
+
+async function carregarEnquetes() {
+  if (!state.gremio) return;
+  const gremioId = state.gremio.id;
+  const canalId = state.canal?.id;
+  const chave = `${gremioId}:${canalId ?? ''}`;
+  if (state.cacheLateral.enquetes.has(chave)) return;
+  const emAndamento = state.requisicoesLaterais.enquetes.get(chave);
+  if (emAndamento) return emAndamento;
+
+  const requisicao = (async () => {
+    let enquetes;
+    if (canalId) {
+      const [doGremio, doCanal] = await Promise.all([
+        api.listarEnquetesGremio(gremioId),
+        api.listarEnquetesCanal(canalId),
+      ]);
+      enquetes = [...doGremio, ...doCanal];
+    } else {
+      enquetes = await api.listarEnquetesGremio(gremioId);
+    }
+    if (state.gremio?.id !== gremioId || state.canal?.id !== canalId) return;
+    state.enquetes = enquetes;
+    state.cacheLateral.enquetes.add(chave);
+    renderSidebar();
+  })();
+  state.requisicoesLaterais.enquetes.set(chave, requisicao);
+  try {
+    await requisicao;
+  } finally {
+    state.requisicoesLaterais.enquetes.delete(chave);
+  }
+}
+
+async function carregarComunicados() {
+  if (!state.gremio) return;
+  const gremioId = state.gremio.id;
+  const canalId = state.canal?.id;
+  const chave = `${gremioId}:${canalId ?? ''}`;
+  if (state.cacheLateral.comunicados.has(chave)) return;
+  const emAndamento = state.requisicoesLaterais.comunicados.get(chave);
+  if (emAndamento) return emAndamento;
+
+  const requisicao = (async () => {
+    let comunicados;
+    if (canalId) {
+      const [doGremio, doCanal] = await Promise.all([
+        api.listarComunicados(gremioId),
+        api.listarComunicadosCanal(canalId),
+      ]);
+      comunicados = [...doGremio, ...doCanal];
+    } else {
+      comunicados = await api.listarComunicados(gremioId);
+    }
+    if (state.gremio?.id !== gremioId || state.canal?.id !== canalId) return;
+    state.comunicados = comunicados;
+    state.cacheLateral.comunicados.add(chave);
+    renderSidebar();
+  })();
+  state.requisicoesLaterais.comunicados.set(chave, requisicao);
+  try {
+    await requisicao;
+  } finally {
+    state.requisicoesLaterais.comunicados.delete(chave);
   }
 }
 
@@ -259,6 +688,8 @@ async function selecionarCanal(id) {
   }
 
   state.carregando = false;
+  if (state.secoesLaterais.enquetes) carregarEnquetes().catch((err) => toast(err.message, 'error'));
+  if (state.secoesLaterais.comunicados) carregarComunicados().catch((err) => toast(err.message, 'error'));
   renderChat();
   iniciarPolling();
 }
@@ -273,7 +704,10 @@ async function novoCanal() {
     ],
     enviar: 'Criar canal',
     onSubmit: async (v) => {
-      criado = await api.criarCanal(state.gremio.id, { nome: v.nome, descricao: v.descricao || null });
+      criado = await api.criarCanal(state.gremio.id, {
+        nome: v.nome,
+        descricao: v.descricao || null,
+      });
     },
   });
   if (!ok) return;
@@ -283,17 +717,31 @@ async function novoCanal() {
 
 async function editarCanal() {
   const c = state.canal;
+  const podeEditar = ehAdmin() || temPermissaoObjeto('CANAL_EDITAR', 'CANAL', c.id);
+  const podeExcluir = ehAdmin() || temPermissaoObjeto('CANAL_EXCLUIR', 'CANAL', c.id);
   const ok = await formDialog({
     titulo: 'Editar canal',
-    fields: [
+    texto: podeEditar ? undefined : 'Você pode excluir este canal, mas não editá-lo.',
+    fields: podeEditar ? [
       { name: 'nome', label: 'Nome', required: true, max: 100, value: c.nome },
       { name: 'descricao', label: 'Descrição', max: 255, value: c.descricao ?? '' },
-    ],
+    ] : [],
+    enviar: podeEditar ? 'Salvar' : 'Fechar',
+    acoes: podeExcluir ? [{
+      rotulo: 'Excluir canal',
+      perigo: true,
+      executar: excluirCanalAtual,
+    }] : [],
     onSubmit: async (v) => {
-      await api.atualizarCanal(c.id, { nome: v.nome, descricao: v.descricao || null });
+      if (!podeEditar) return;
+      await api.atualizarCanal(c.id, {
+        nome: v.nome,
+        descricao: v.descricao || null,
+      });
     },
   });
   if (!ok) return;
+  if (!podeEditar) return;
   await recarregarCanais();
   await selecionarCanal(c.id);
 }
@@ -453,7 +901,9 @@ async function removerMembro(m) {
 }
 
 async function darCargo(m) {
-  const disponiveis = state.cargos.filter((c) => !c.padrao && !m.cargos_ids.includes(c.id));
+  const disponiveis = state.cargos.filter((c) =>
+    !c.padrao && !m.cargos_ids.includes(c.id) && podeAtribuirCargo(c)
+  );
   if (!disponiveis.length) return toast('Não há outros cargos para atribuir.', 'info');
   const ok = await formDialog({
     titulo: `Cargo para ${m.nome ?? 'membro'}`,
@@ -473,7 +923,17 @@ async function tirarCargo(m, cargo) {
   }
 }
 
-const opcoesPermissao = () => Object.entries(PERMISSOES).map(([value, label]) => ({ value, label }));
+const opcoesPermissao = () => Object.entries(PERMISSOES)
+  .filter(([codigo]) => [
+    'GERENCIAR_MEMBROS',
+    'GERENCIAR_GREMIO',
+    'ADMINISTRADOR',
+  ].includes(codigo))
+  .map(([value, label]) => ({ value, label }));
+const podeEditarCargo = (cargo) =>
+  ehAdmin() || temPermissaoObjeto('CARGO_EDITAR', 'CARGO', cargo.id);
+const podeAtribuirCargo = (cargo) =>
+  ehAdmin() || temPermissaoObjeto('CARGO_ATRIBUIR', 'CARGO', cargo.id);
 
 async function formCargo(cargo) {
   const novo = !cargo;
@@ -486,6 +946,10 @@ async function formCargo(cargo) {
       name: 'prioridade', label: 'Prioridade (1–1000)', type: 'number', required: true, min: 1, max: 1000,
       value: cargo?.prioridade ?? 10,
     });
+    fields.push({
+      name: 'max_ocupantes', label: 'Máximo de ocupantes (0 = sem limite)',
+      type: 'number', required: true, min: 0, value: cargo?.max_ocupantes ?? 0,
+    });
   }
   fields.push({ name: 'permissoes', label: 'Permissões', type: 'checks', options: opcoesPermissao(), value: cargo?.permissoes ?? [] });
 
@@ -497,10 +961,109 @@ async function formCargo(cargo) {
     onSubmit: async (v) => {
       const dados = { nome: v.nome, cor: v.cor.toUpperCase(), permissoes: v.permissoes };
       if (v.prioridade !== undefined) dados.prioridade = v.prioridade;
+      if (v.max_ocupantes !== undefined) dados.max_ocupantes = Number(v.max_ocupantes);
       if (novo) await api.criarCargo(state.gremio.id, dados);
       else await api.atualizarCargo(state.gremio.id, cargo.id, dados);
     },
   });
+}
+
+async function editarPermissoesCargo(cargo) {
+  try {
+    const permissoes = await api.listarPermissoesRelacionaisCargo(
+      state.gremio.id,
+      cargo.id
+    );
+    const editaveis = permissoes.filter((p) =>
+      ehAdmin() || temPermissaoObjeto(p.codigo, p.recurso_tipo, p.recurso_id)
+    );
+    const marcadas = editaveis.filter((p) => p.concedida).map((p) => String(p.id));
+    const ok = await formDialog({
+      titulo: `Permissões de ${cargo.nome}`,
+      texto: 'Selecione quais permissões este cargo concede aos seus membros.',
+      fields: [{
+        name: 'permissoes',
+        label: 'Permissões disponíveis no grêmio',
+        type: 'checks',
+        value: marcadas,
+        options: editaveis.map((p) => ({
+          value: String(p.id),
+          label: `${PERMISSOES[p.codigo] ?? p.nome} (${p.recurso_tipo}${p.recurso_tipo === 'GREMIO' ? '' : ` #${p.recurso_id}`})`,
+        })),
+      }],
+      onSubmit: async ({ permissoes: selecionadas }) => {
+        const antes = new Set(marcadas);
+        const depois = new Set(selecionadas);
+        await Promise.all([
+          ...selecionadas.filter((id) => !antes.has(id)).map((id) =>
+            api.concederPermissaoRelacionalCargo(state.gremio.id, cargo.id, Number(id))
+          ),
+          ...marcadas.filter((id) => !depois.has(id)).map((id) =>
+            api.revogarPermissaoRelacionalCargo(state.gremio.id, cargo.id, Number(id))
+          ),
+        ]);
+      },
+    });
+    if (ok) toast('Permissões atualizadas.', 'success');
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+}
+
+async function editarPermissoesCanal() {
+  try {
+    const cargos = await api.listarCargos(state.gremio.id);
+    if (!cargos.length) return;
+    let cargoId;
+    const escolhido = await formDialog({
+      titulo: `Permissões de #${state.canal.nome}`,
+      fields: [{
+        name: 'cargo_id',
+        label: 'Cargo',
+        type: 'select',
+        options: cargos.map((cargo) => ({ value: cargo.id, label: cargo.nome })),
+      }],
+      enviar: 'Continuar',
+      onSubmit: async ({ cargo_id }) => { cargoId = Number(cargo_id); },
+    });
+    if (!escolhido) return;
+    const permissoes = await api.listarPermissoesRelacionaisCanal(
+      state.canal.id,
+      cargoId
+    );
+    const editaveis = permissoes.filter((p) =>
+      ehAdmin() || temPermissaoObjeto(p.codigo, 'CANAL', state.canal.id)
+    );
+    const marcadas = editaveis.filter((p) => p.concedida).map((p) => String(p.id));
+    const atualizado = await formDialog({
+      titulo: `Permissões do cargo`,
+      fields: [{
+        name: 'permissoes',
+        label: 'Permissões neste canal',
+        type: 'checks',
+        value: marcadas,
+        options: editaveis.map((p) => ({
+          value: String(p.id),
+          label: PERMISSOES[p.codigo] ?? p.nome,
+        })),
+      }],
+      onSubmit: async ({ permissoes: selecionadas }) => {
+        const antes = new Set(marcadas);
+        const depois = new Set(selecionadas);
+        await Promise.all([
+          ...selecionadas.filter((id) => !antes.has(id)).map((id) =>
+            api.concederPermissaoRelacionalCanal(state.canal.id, cargoId, Number(id))
+          ),
+          ...marcadas.filter((id) => !depois.has(id)).map((id) =>
+            api.revogarPermissaoRelacionalCanal(state.canal.id, cargoId, Number(id))
+          ),
+        ]);
+      },
+    });
+    if (atualizado) toast('Permissões do canal atualizadas.', 'success');
+  } catch (err) {
+    toast(err.message, 'error');
+  }
 }
 
 function abrirCargos() {
@@ -513,7 +1076,7 @@ function abrirCargos() {
     } catch (err) {
       return toast(err.message, 'error');
     }
-    const gerencia = podeGremio('GERENCIAR_CARGOS');
+    const gerencia = podeGremio('GREMIO_CRIAR_CARGO');
     clear(corpo);
     if (gerencia) {
       corpo.append(
@@ -535,13 +1098,19 @@ function abrirCargos() {
               c.permissoes.length ? c.permissoes.map((p) => PERMISSOES[p] ?? p).join(', ') : 'Sem permissões'),
           ),
           h('span', { class: 'muted prio' }, c.padrao ? '' : `prioridade ${c.prioridade}`),
-          gerencia
+          podeEditarCargo(c)
             ? h('div', { class: 'row-actions' },
                 h('button', {
                   class: 'btn ghost sm', type: 'button',
                   onclick: async () => { if (await formCargo(c)) { desenhar(); carregarMembros(); } },
                 }, 'Editar'),
-                c.padrao ? null : h('button', {
+                podeGremio('GREMIO_GERENCIAR_PERMISSOES')
+                  ? h('button', {
+                    class: 'btn ghost sm', type: 'button',
+                    onclick: () => editarPermissoesCargo(c),
+                  }, 'Permissões')
+                  : null,
+                c.padrao || !podeGremio('GREMIO_GERENCIAR_PERMISSOES') ? null : h('button', {
                   class: 'btn ghost sm danger-text', type: 'button',
                   onclick: async () => {
                     if (!(await confirmar(`Excluir o cargo ${c.nome}?`, 'Quem o tem perde as permissões dele.', 'Excluir'))) return;
@@ -592,7 +1161,9 @@ function renderRail() {
       }, initials(g.nome))
     )
   );
-  rail.append(h('button', { class: 'rail-item add', type: 'button', title: 'Criar grêmio', 'aria-label': 'Criar grêmio', onclick: novoGremio }, '+'));
+  if (podeCriarGremio()) {
+    rail.append(h('button', { class: 'rail-item add', type: 'button', title: 'Criar grêmio', 'aria-label': 'Criar grêmio', onclick: novoGremio }, '+'));
+  }
 }
 
 function renderSidebar() {
@@ -605,39 +1176,156 @@ function renderSidebar() {
     return;
   }
 
-  head.append(h('strong', { class: 'truncate', title: state.gremio.nome }, state.gremio.nome));
-
-  lista.append(
-    h('div', { class: 'section-title' },
-      h('span', {}, 'Canais'),
-      podeGremio('GERENCIAR_CANAIS')
-        ? h('button', { class: 'icon-btn', type: 'button', title: 'Novo canal', 'aria-label': 'Novo canal', onclick: novoCanal }, '+')
-        : null)
+  const podeEditarGremio = Boolean(
+    podeGremio('GREMIO_EDITAR_NOME') || podeGremio('GREMIO_EDITAR_DESCRICAO')
   );
+  const podePermissoesCanal = Boolean(state.canal && (ehAdmin() ||
+    temPermissaoObjeto('CANAL_GERENCIAR_PERMISSOES', 'CANAL', state.canal.id)));
+  const podeCriarCanal = Boolean(podeGremio('GREMIO_CRIAR_CANAL'));
+  const podeAdicionarEnquete = Boolean(podeGremio('GREMIO_CRIAR_ENQUETE') ||
+    (state.canal && temPermissaoObjeto('CANAL_CRIAR_ENQUETE', 'CANAL', state.canal.id)));
+  const podeAdicionarComunicado = Boolean(podeGremio('GREMIO_CRIAR_COMUNICADO') ||
+    (state.canal && temPermissaoObjeto('CANAL_CRIAR_COMUNICADO', 'CANAL', state.canal.id)));
+  const acoesAdicionar = [
+    podeCriarCanal
+      ? h('button', {
+        type: 'button',
+        onclick: (event) => {
+          event.currentTarget.closest('details').open = false;
+          novoCanal();
+        },
+      }, 'Criar canal')
+      : null,
+    podeAdicionarComunicado
+      ? h('button', {
+        type: 'button',
+        onclick: (event) => {
+          event.currentTarget.closest('details').open = false;
+          criarComunicado(() => {});
+        },
+      }, 'Adicionar comunicado')
+      : null,
+    podeAdicionarEnquete
+      ? h('button', {
+        type: 'button',
+        onclick: (event) => {
+          event.currentTarget.closest('details').open = false;
+          criarEnquete(() => {});
+        },
+      }, 'Adicionar enquete')
+      : null,
+  ].filter(Boolean);
+  const menuAdicionar = acoesAdicionar.length
+    ? h('details', { class: 'sidebar-add-menu' },
+      h('summary', {
+        class: 'icon-btn',
+        title: 'Adicionar',
+        'aria-label': 'Adicionar canal, comunicado ou enquete',
+      }, '+'),
+      h('div', { class: 'sidebar-popover' }, acoesAdicionar))
+    : null;
+  head.append(...[
+    h('strong', { class: 'truncate', title: state.gremio.nome }, state.gremio.nome),
+    menuAdicionar,
+    (podeEditarGremio || podePermissoesCanal)
+      ? h('button', {
+        class: 'icon-btn',
+        type: 'button',
+        title: 'Editar grêmio',
+        'aria-label': 'Editar grêmio',
+        onclick: editarGremio,
+      }, '✎')
+      : null
+  ].filter(Boolean));
 
-  if (!state.canais.length) lista.append(h('p', { class: 'muted pad' }, 'Nenhum canal disponível para você.'));
-
-  state.canais.forEach((c) =>
-    lista.append(
-      h('button', {
+  const canaisConteudo = h('div', { class: 'sidebar-section-content' },
+    podeGremio('GREMIO_CRIAR_CANAL')
+      ? h('button', {
+        class: 'sidebar-entry sidebar-create',
+        type: 'button',
+        onclick: novoCanal,
+      }, '+ Novo canal')
+      : null,
+    !state.canais.length
+      ? h('p', { class: 'muted pad' }, 'Nenhum canal disponível para você.')
+      : state.canais.map((c) => h('button', {
         class: `channel${state.canal?.id === c.id ? ' active' : ''}`,
         type: 'button', onclick: () => selecionarCanal(c.id),
-      }, h('span', { class: 'hash' }, '#'), h('span', { class: 'truncate' }, c.nome))
-    )
+      }, h('span', { class: 'hash' }, '#'), h('span', { class: 'truncate' }, c.nome))),
   );
+  lista.append(criarSecaoLateral('canais', 'Canais', canaisConteudo));
 
-  lista.append(h('button', { class: 'link-btn leave', type: 'button', onclick: sairDoGremio }, 'Sair do grêmio'));
+  const comunicadosConteudo = h('div', { class: 'sidebar-section-content' },
+    ...(state.comunicados.length
+      ? state.comunicados.slice(0, 5).map((comunicado) => h('button', {
+        class: 'sidebar-entry sidebar-preview',
+        type: 'button',
+        title: comunicado.titulo,
+        onclick: abrirComunicados,
+      }, comunicado.titulo))
+      : [h('p', { class: 'muted pad' }, 'Nenhum comunicado.')]),
+  );
+  lista.append(criarSecaoLateral(
+    'comunicados',
+    'Comunicados',
+    comunicadosConteudo,
+    () => carregarComunicados().catch((err) => toast(err.message, 'error')),
+    state.comunicados.length
+  ));
+
+  const enquetesConteudo = h('div', { class: 'sidebar-section-content' },
+    ...(state.enquetes.length
+      ? state.enquetes.slice(0, 5).map((enquete) => h('button', {
+        class: 'sidebar-entry sidebar-preview',
+        type: 'button',
+        title: enquete.pergunta,
+        onclick: abrirEnquetes,
+      }, enquete.pergunta))
+      : [h('p', { class: 'muted pad' }, 'Nenhuma enquete.')]),
+  );
+  lista.append(criarSecaoLateral(
+    'enquetes',
+    'Enquetes',
+    enquetesConteudo,
+    () => carregarEnquetes().catch((err) => toast(err.message, 'error')),
+    state.enquetes.length
+  ));
+}
+
+function criarSecaoLateral(chave, titulo, conteudo, aoAbrir, quantidade) {
+  const secao = h('details', {
+    class: 'sidebar-section',
+    open: state.secoesLaterais[chave],
+    ontoggle: () => {
+      state.secoesLaterais[chave] = secao.open;
+      localStorage.setItem(`elo_secao_${chave}`, secao.open ? '1' : '0');
+      if (secao.open && aoAbrir) aoAbrir();
+    },
+  },
+  h('summary', { class: 'section-title' },
+    h('span', {}, titulo, quantidade ? ` (${quantidade})` : ''),
+    h('span', { class: 'section-chevron', 'aria-hidden': 'true' }, '›')),
+  conteudo);
+  return secao;
 }
 
 function renderChat() {
   const chat = clear($('#chat'));
 
   if (!state.gremio) {
+    const conteudo = [
+      h('h2', {}, 'Você ainda não participa de um grêmio'),
+      h('p', { class: 'muted' }, 'Peça a alguém para adicionar você usando o seu ID.')
+    ];
+    if (podeCriarGremio()) {
+      conteudo.push(h('button', {
+        class: 'btn primary',
+        type: 'button',
+        onclick: novoGremio,
+      }, 'Criar grêmio'));
+    }
     chat.append(
-      h('div', { class: 'empty' },
-        h('h2', {}, 'Comece criando um grêmio'),
-        h('p', { class: 'muted' }, 'Ou peça a alguém para adicionar você usando o seu ID.'),
-        h('button', { class: 'btn primary', type: 'button', onclick: novoGremio }, 'Criar grêmio'))
+      h('div', { class: 'empty' }, ...conteudo)
     );
     return;
   }
@@ -663,8 +1351,10 @@ function renderChat() {
         h('h2', {}, h('span', { class: 'hash' }, '#'), c.nome),
         c.descricao ? h('p', { class: 'muted truncate' }, c.descricao) : null),
       h('div', { class: 'row-actions' },
-        podeGremio('GERENCIAR_CANAIS') ? h('button', { class: 'btn ghost sm', type: 'button', onclick: editarCanal }, 'Editar canal') : null,
-        podeGremio('GERENCIAR_CANAIS') ? h('button', { class: 'btn ghost sm danger-text', type: 'button', onclick: excluirCanalAtual }, 'Excluir') : null,
+        (ehAdmin() || temPermissaoObjeto('CANAL_EDITAR', 'CANAL', c.id) ||
+          temPermissaoObjeto('CANAL_EXCLUIR', 'CANAL', c.id))
+          ? h('button', { class: 'btn ghost sm', type: 'button', onclick: editarCanal }, 'Editar canal')
+          : null,
         h('button', {
           class: 'btn ghost sm', type: 'button', 'aria-pressed': state.membrosAberto,
           onclick: alternarMembros,
@@ -805,7 +1495,6 @@ function renderMembros() {
   if (painel.hidden) return;
 
   const cargosPorId = new Map(state.cargos.map((c) => [c.id, c]));
-  const gerCargos = podeGremio('GERENCIAR_CARGOS');
   const gerMembros = podeGremio('GERENCIAR_MEMBROS');
 
   painel.append(
@@ -830,10 +1519,14 @@ function renderMembros() {
             cargos.map((c) =>
               h('span', { class: 'chip' },
                 h('span', { class: 'dot', style: { background: c.cor } }), c.nome,
-                gerCargos && podeMexer
+                podeAtribuirCargo(c) && podeMexer
                   ? h('button', { class: 'chip-x', type: 'button', title: `Remover cargo ${c.nome}`, 'aria-label': `Remover cargo ${c.nome}`, onclick: () => tirarCargo(m, c) }, '×')
                   : null)),
-            gerCargos && podeMexer
+            state.cargos.some((cargo) =>
+              !cargo.padrao &&
+              !m.cargos_ids.includes(cargo.id) &&
+              podeAtribuirCargo(cargo)
+            ) && podeMexer
               ? h('button', { class: 'chip add', type: 'button', onclick: () => darCargo(m) }, '+ cargo')
               : null)),
         gerMembros && podeMexer && m.usuario_id !== state.me.id
